@@ -3,42 +3,51 @@
 # Usage: ./discord_update.sh [--manual]
 
 set -e
+
 DOWNLOAD_URL="https://discord.com/api/download?platform=linux&format=tar.gz"
 INSTALL_DIR="/home/$USER/apps/discord"
 TEMP_DIR="/tmp/discord-update"
 SYMLINK_PATH="/usr/local/bin/discord"
-VERSION_FILE="$INSTALL_DIR/.current_version"
+BUILD_INFO="$INSTALL_DIR/resources/build_info.json"
 
 # Ensure directories exist
 mkdir -p "$INSTALL_DIR" "$TEMP_DIR"
 
+# Get latest version from redirect URL
+echo "Checking for updates..."
+REDIRECT_URL=$(curl -sI "$DOWNLOAD_URL" | grep -i "^location:" | sed 's/location: //i' | tr -d '\r')
+NEW_VERSION=$(echo "$REDIRECT_URL" | grep -oP 'discord-\K[0-9]+\.[0-9]+\.[0-9]+')
+
+if [[ -z "$NEW_VERSION" ]]; then
+    echo "Error: Could not determine latest version"
+    exit 1
+fi
+
+echo "Latest version: $NEW_VERSION"
+
+# Get current installed version from build_info.json
+CURRENT_VERSION=""
+if [[ -f "$BUILD_INFO" ]]; then
+    CURRENT_VERSION=$(grep -oP '"version":\s*"\K[^"]+' "$BUILD_INFO" 2>/dev/null || echo "")
+fi
+
+echo "Installed version: ${CURRENT_VERSION:-none}"
+
+# Compare versions
+if [[ "$NEW_VERSION" == "$CURRENT_VERSION" ]] && [[ "$1" != "--manual" ]]; then
+    echo "Already up to date (version: $CURRENT_VERSION)"
+    rm -rf "$TEMP_DIR"
+    exit 0
+fi
+
 # Download latest version
-echo "Downloading latest Discord..."
+echo "Downloading Discord $NEW_VERSION..."
 DOWNLOAD_FILE="$TEMP_DIR/discord-latest.tar.gz"
 curl -L -o "$DOWNLOAD_FILE" "$DOWNLOAD_URL"
-
-# Extract version from tar.gz (Discord package contains a version in the folder name)
-TEMP_EXTRACT="$TEMP_DIR/extract"
-mkdir -p "$TEMP_EXTRACT"
-tar -tzf "$DOWNLOAD_FILE" | head -1 | cut -f1 -d"/" > "$TEMP_DIR/new_version"
-NEW_VERSION=$(cat "$TEMP_DIR/new_version")
-
-# Check if version file exists and compare
-if [[ -f "$VERSION_FILE" ]]; then
-    CURRENT_VERSION=$(cat "$VERSION_FILE")
-    if [[ "$NEW_VERSION" == "$CURRENT_VERSION" ]] && [[ "$1" != "--manual" ]]; then
-        echo "Already up to date (version: $CURRENT_VERSION)"
-        rm -rf "$TEMP_DIR"
-        exit 0
-    fi
-fi
 
 # Extract and install
 echo "Installing Discord version: $NEW_VERSION"
 tar -xzf "$DOWNLOAD_FILE" -C "$INSTALL_DIR" --strip-components=1
-
-# Update version file
-echo "$NEW_VERSION" > "$VERSION_FILE"
 
 # Update symlink (requires sudo)
 if [[ -w "$SYMLINK_PATH" ]] || sudo -n true 2>/dev/null; then
@@ -53,6 +62,3 @@ fi
 rm -rf "$TEMP_DIR"
 
 echo "Discord updated successfully to $NEW_VERSION"
-echo "# Add cronjob for automatic weekly updates: 
-run: crontab -e
-add: 0 3 * * 0 /home/$USER/apps/discord_update.sh"
